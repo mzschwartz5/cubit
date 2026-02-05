@@ -342,6 +342,12 @@ global proc VoxelizerMenu_close(string $cubeName) {
     }
 }
 
+global proc VoxelizerMenu_initializeUI() {
+    VoxelizerMenu_addToShelf();
+    VoxelizerMenu_addMenu();
+    cubit_AddResetCacheButtonToTimelineMenu();
+}
+
 global proc VoxelizerMenu_addToShelf() {
     global string $voxelPaintContext;
     global string $voxelDragContext;
@@ -403,8 +409,31 @@ global proc VoxelizerMenu_addToShelf() {
     shelfTabLayout -edit -selectTab "cubit" $gShelfTopLevel;
 }
 
-global proc VoxelizerMenu_removeFromShelf() {
+// Top-level cubit menu (only option right now is to export)
+global proc VoxelizerMenu_addMenu() {
+    global string $gMainWindow;
+
+    if (`menu -exists CubitMenu`) {
+        deleteUI CubitMenu;
+    }
+
+    string $parentMenu = `menu -label "cubit" -tearOff false -parent $gMainWindow CubitMenu`;
+
+    menuItem
+        -parent $parentMenu
+        -label "Export to Alembic"
+        -annotation "Export the current scene via Alembic"
+        cubitExportMenuItem;
+}
+
+global proc VoxelizerMenu_tearDownUI() {
     if (`shelfLayout -exists "cubit"`) {
         deleteShelfTabNoPrompt("cubit");
     }
+
+    if (`menu -exists CubitMenu`) {
+        deleteUI CubitMenu;
+    }
+
+    cubit_RemoveResetCacheButtonFromTimelineMenu();
 }
