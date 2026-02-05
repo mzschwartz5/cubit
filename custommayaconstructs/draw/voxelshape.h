@@ -34,6 +34,7 @@ public:
     inline static MObject aVoxelData;
     inline static MObject aTrigger;
     inline static MObject aInteriorMaterial;
+    inline static MObject aExporting; // Used to indicate that an export is in progress
 
     static void* creator() { return new VoxelShape(); }
     
@@ -89,6 +90,14 @@ public:
         tAttr.setWritable(true);
         tAttr.setReadable(true);
         status = addAttribute(aInteriorMaterial);
+        CHECK_MSTATUS_AND_RETURN_IT(status);
+
+        aExporting = nAttr.create("exporting", "exp", MFnNumericData::kBoolean, false, &status);
+        CHECK_MSTATUS_AND_RETURN_IT(status);
+        nAttr.setStorable(false);
+        nAttr.setWritable(true);
+        nAttr.setReadable(false);
+        status = addAttribute(aExporting);
         CHECK_MSTATUS_AND_RETURN_IT(status);
 
         return MS::kSuccess;
@@ -292,10 +301,19 @@ public:
         rebuildGeometry = false;
     }
 
+    bool requiresMeshVisibilityUpdate() const {
+        return updateMeshVisibility;
+    }
+
+    void clearMeshVisibilityUpdateFlag() {
+        updateMeshVisibility = false;
+    }
+
 private:
     bool isInitialized = false;
     bool isParticleSRVPlugDirty = false;
     bool rebuildGeometry = false;
+    bool updateMeshVisibility = false;
     MCallbackIdArray callbackIds;
     EventBase::Unsubscribe unsubPaintStateChanges;
     DeformVerticesCompute deformVerticesCompute;
@@ -378,6 +396,26 @@ private:
         MGlobal::executeCommand("sets -e -forceElement \"" + interiorMaterialShaderGroup + "\"", false, true);
     }
 
+    /**
+     * To support export via Alembic, we need to do a few shenanigans. AbcExport doesn't support custom shapes, so we need to
+     * temporarily swap out our VoxelShape with the original geometry (a regular mesh) by setting or unsetting it as an intermediate object,
+     * and disabling the mesh render items on the subscene override.
+     */
+    static void onExportingChanged(MNodeMessage::AttributeMessage msg, MPlug& plug, MPlug& otherPlug, void* clientData) {
+        if (plug != aExporting || !(msg & MNodeMessage::kAttributeSet)) return;
+
+        VoxelShape* voxelShape = static_cast<VoxelShape*>(clientData);
+        bool isExporting = plug.asBool();
+
+        MDagPath originalGeomPath = voxelShape->pathToOriginalGeometry();
+        if (!originalGeomPath.isValid()) return;
+
+        MFnDagNode originalGeomDagNode(originalGeomPath);
+        originalGeomDagNode.setIntermediateObject(!isExporting);
+
+        voxelShape->updateMeshVisibility = true;
+    }
+
     void postConstructor() override {
         MPxSurfaceShape::postConstructor();
         setRenderable(true);
@@ -386,6 +424,9 @@ private:
         callbackIds.append(callbackId);
 
         callbackId = MNodeMessage::addAttributeChangedCallback(thisMObject(), onInteriorMaterialChanged, this);
+        callbackIds.append(callbackId);
+
+        callbackId = MNodeMessage::addAttributeChangedCallback(thisMObject(), onExportingChanged, this);
         callbackIds.append(callbackId);
 
         // Effectively a destructor callback to clean up when the node is deleted

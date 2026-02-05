@@ -793,6 +793,22 @@ private:
         setGeometryForRenderItem(renderItem, vbArray, *voxelIndexBuffers[primitiveType].get(), &bounds);
     }
 
+    void setMeshRenderItemsVisibility(
+        MSubSceneContainer& container,
+        bool visible
+    ) {
+        MSubSceneContainer::Iterator* it = container.getIterator();
+        it->reset();
+        MRenderItem* item = nullptr;
+
+        while ((item = it->next()) != nullptr) {
+            if (meshRenderItemIDs.find(item->InternalObjectId()) == meshRenderItemIDs.end()) continue;
+            item->enable(visible);
+        }
+
+        it->destroy();
+    }
+
     /**
      * Creates the actual, visible, voxelized mesh render items (multiple, possibly, if the original, unvoxelized mesh has multiple shaders / face sets).
      */
@@ -802,7 +818,6 @@ private:
         meshIndexBuffers.clear();
         meshRenderItemIDs.clear();
         allMeshIndices.clear();
-
 
         const MDagPath originalGeomPath = voxelShape->pathToOriginalGeometry();
         MFnMesh originalMeshFn(originalGeomPath.node());
@@ -921,7 +936,9 @@ public:
         const MFrameContext& frameContext) const override
     {
         bool rebuildGeometry = voxelShape->requiresGeometryRebuild();
-        return shouldUpdate || rebuildGeometry;
+        bool meshVisibilityUpdate = voxelShape->requiresMeshVisibilityUpdate();
+
+        return shouldUpdate || rebuildGeometry || meshVisibilityUpdate;
     }
 
     /**
@@ -939,6 +956,12 @@ public:
             editModeChanged = true;
         }
         
+        if (voxelShape->requiresMeshVisibilityUpdate()) {
+            voxelShape->clearMeshVisibilityUpdateFlag();
+            bool visible = !(MPlug(voxelShapeObj, VoxelShape::aExporting).asBool());
+            setMeshRenderItemsVisibility(container, visible);
+        }
+
         if (container.count() <= 0) {
             recentlyHiddenFaces.clear();
             recentlyHiddenVoxels.clear();
