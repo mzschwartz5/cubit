@@ -305,15 +305,14 @@ EXPORT MStatus initializePlugin(MObject obj)
     Utils::extractResourceToFile(MhInstPlugin, IDR_PNG_VOXELCOLLIDER, L"PNG", iconsDir + "VoxelCollider.png");
     Utils::extractResourceToFile(MhInstPlugin, IDR_PNG_VOXELPAINT, L"PNG", iconsDir + "VoxelPaint.png");
 
-	MGlobal::executeCommand("VoxelizerMenu_addToShelf");
-	MGlobal::executeCommand("cubit_AddResetCacheButtonToTimelineMenu");
+	MGlobal::executeCommand("VoxelizerMenu_initializeUI");
 	return status;
 }
 
 // Cleanup Plugin upon unloading
 EXPORT MStatus uninitializePlugin(MObject obj)
 {
-	MGlobal::executeCommand("VoxelizerMenu_removeFromShelf");
+	MGlobal::executeCommand("VoxelizerMenu_tearDownUI");
 
 	// Deregister all commands, nodes, and custom plug data types
     MStatus status;

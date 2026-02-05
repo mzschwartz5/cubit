@@ -296,6 +296,19 @@ global proc cubit_AddResetCacheButtonToTimelineMenu() {
         cubitFlushCacheMenuItem;
 }
 
+global proc cubit_RemoveResetCacheButtonFromTimelineMenu() {
+    string $menu = "TimeSlider|MainTimeSliderLayout|TimeSliderMenu";
+    string $cachedPlaybackMenuItem = cubit_findMenuItemByLabel($menu, "Cached Playback");
+    if ($cachedPlaybackMenuItem == "") {
+        return;
+    }
+
+    string $flushCacheMenuItem = cubit_findMenuItemByLabel($cachedPlaybackMenuItem, "Flush cubit (plugin) cache");
+    if ($flushCacheMenuItem != "") {
+        deleteUI $flushCacheMenuItem;
+    }
+}
+
 global proc string cubit_findMenuItemByLabel(string $rootMenuOrItem, string $targetLabel)
 {
     string $children[];
