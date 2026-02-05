@@ -423,7 +423,29 @@ global proc VoxelizerMenu_addMenu() {
         -parent $parentMenu
         -label "Export to Alembic"
         -annotation "Export the current scene via Alembic"
+        -command "VoxelizerMenu_kickOffAlembicExport();"
         cubitExportMenuItem;
+}
+
+global proc VoxelizerMenu_kickOffAlembicExport() {
+    int $loaded = `pluginInfo -q -loaded "AbcExport"`;
+    if (!$loaded) {
+        if (catchQuiet(`loadPlugin "AbcExport"`)) {
+            warning("Failed to load AbcExport plugin. Enable it in Plug-in Manager (AbcExport.mll).");
+            return;
+        }
+    }
+
+    string $voxelShapes[] = `ls -type "VoxelShape"`;
+    for ($voxelShape in $voxelShapes) {
+        setAttr ($voxelShape + ".exporting") 1;
+    }
+
+    AlembicExportAll;
+
+    for ($voxelShape in $voxelShapes) {
+        setAttr ($voxelShape + ".exporting") 0;
+    }
 }
 
 global proc VoxelizerMenu_tearDownUI() {
