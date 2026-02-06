@@ -30,7 +30,7 @@ public:
         const std::vector<uint>& exportVertexIdMap
     ) : ComputeShader(IDR_SHADER1), positionsUAV(positionsUAV), normalsUAV(normalsUAV), 
                                     originalVertPositionsSRV(originalVertPositionsSRV), originalNormalsSRV(originalNormalsSRV), 
-                                    particlesSRV(particlesSRV), exportVertexIdMap(exportVertexIdMap)
+                                    particlesSRV(particlesSRV), exportVertexIdMap(invertExportVertexIdMap(exportVertexIdMap))
     {
         initializeBuffers(numParticles, vertexCount, gridRotationInverse, originalParticles, vertexVoxelIds);
     }
@@ -72,11 +72,11 @@ public:
         float* rawPositions = const_cast<float*>(meshFn.getRawPoints(&status));
 
         for (size_t i = 0; i < exportVertexIdMap.size(); i++) {
-            uint mayaVertexId = exportVertexIdMap[i]; // Map extracted vertex ID to logical vertex ID
+            uint extractedVertexId = exportVertexIdMap[i]; // Map extracted vertex ID to logical vertex ID
             // This will overwrite positions multiple times, but they should all be identical for the same logical vertex.
-            rawPositions[mayaVertexId * 3] = positionData[i * 3];
-            rawPositions[mayaVertexId * 3 + 1] = positionData[i * 3 + 1];
-            rawPositions[mayaVertexId * 3 + 2] = positionData[i * 3 + 2];
+            rawPositions[i * 3] = positionData[extractedVertexId * 3];
+            rawPositions[i * 3 + 1] = positionData[extractedVertexId * 3 + 1];
+            rawPositions[i * 3 + 2] = positionData[extractedVertexId * 3 + 2];
         }
 
         meshFn.updateSurface();
@@ -153,5 +153,28 @@ private:
         gridRotationInverse.get(constants.gridRotationInverse);
         constants.vertexCount = vertexCount;
         constantsBuffer = DirectX::createConstantBuffer<DeformVerticesConstantBuffer>(constants);
+    }
+
+    /**
+     * Invert the export vertex ID map so that it maps from an original vertex ID to the vertex ID in the extracted vertex buffer.
+     * The original mapping is many-to-one, but duplicate vertices should have identical positions, so it's okay to overwrite.
+     * 
+     * We invert the mapping because the number of logical vertices is less than the number of extracted vertices (split by normals, uvs, etc).
+     * When exporting, it's faster to iterate over the fewer logical vertices and look up their corresponding extracted vertex positions.
+     */
+    std::vector<uint> invertExportVertexIdMap(const std::vector<uint>& vertexIdMap) {
+        if (vertexIdMap.empty()) return {};
+
+        uint maxVal = 0;
+        for (uint v : vertexIdMap) {
+            if (v > maxVal) maxVal = v;
+        }
+        std::vector<uint> inverted(static_cast<size_t>(maxVal) + 1, std::numeric_limits<uint>::max());
+
+        for (size_t i = 0; i < vertexIdMap.size(); ++i) {
+            inverted[vertexIdMap[i]] = static_cast<uint>(i);
+        }
+
+        return inverted;
     }
 };
