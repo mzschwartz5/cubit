@@ -238,25 +238,13 @@ public:
         size_t elementCount = desc.ByteWidth / sizeof(T);
         outData.resize(elementCount);
 
-        // Create a staging buffer (CPU read)
-        D3D11_BUFFER_DESC stagingDesc = {};
-        stagingDesc.Usage = D3D11_USAGE_STAGING;
-        stagingDesc.ByteWidth = desc.ByteWidth;
-        stagingDesc.BindFlags = 0;
-        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        stagingDesc.MiscFlags = 0;
-        stagingDesc.StructureByteStride = desc.StructureByteStride;
-
-        ComPtr<ID3D11Buffer> staging;
-        HRESULT hr = dxDevice->CreateBuffer(&stagingDesc, nullptr, staging.GetAddressOf());
-
-        // Copy GPU buffer to staging buffer and then map it back to CPU memory
-        dxContext->CopyResource(staging.Get(), buffer.Get());
-        D3D11_MAPPED_SUBRESOURCE mapped = {};
-        hr = dxContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-        memcpy(outData.data(), mapped.pData, desc.ByteWidth);
-        dxContext->Unmap(staging.Get(), 0);
+        copyBufferToPointer(buffer, outData.data());
     }
+
+    static void copyBufferToPointer(
+        const ComPtr<ID3D11Buffer>& buffer,
+        void* outData
+    );
 
     /*
     * Clears a UINT buffer with the value 0.
@@ -271,29 +259,11 @@ public:
     static void copyBufferToBuffer(
         const ComPtr<ID3D11View>& srcView,
         const ComPtr<ID3D11View>& dstView
-    ) {
-        ComPtr<ID3D11Resource> srcResource;
-        srcView->GetResource(srcResource.GetAddressOf());
-        ComPtr<ID3D11Resource> dstResource;
-        dstView->GetResource(dstResource.GetAddressOf());
+    );
 
-        D3D11_BUFFER_DESC srcDesc{}, dstDesc{};
-        ComPtr<ID3D11Buffer> srcBuffer, dstBuffer;
-        srcResource.As(&srcBuffer);
-        dstResource.As(&dstBuffer);
-        srcBuffer->GetDesc(&srcDesc);
-        dstBuffer->GetDesc(&dstDesc);
-
-        UINT copySize = (srcDesc.ByteWidth < dstDesc.ByteWidth) ? srcDesc.ByteWidth : dstDesc.ByteWidth;
-        D3D11_BOX srcBox = { 0, 0, 0, copySize, 1, 1 };
-
-        DirectX::getContext()->CopySubresourceRegion(
-            dstResource.Get(),
-            0, 0, 0, 0,
-            srcResource.Get(),
-            0, &srcBox
-        );
-    }
+    static ComPtr<ID3D11Buffer> getBufferFromView(
+        const ComPtr<ID3D11View>& view
+    );
 
     static void notifyMayaOfMemoryUsage(const ComPtr<ID3D11Buffer>& buffer, bool acquire = false);
     static int getNumElementsInBuffer(const ComPtr<ID3D11Buffer>& buffer);

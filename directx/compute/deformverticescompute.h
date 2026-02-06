@@ -1,6 +1,10 @@
 #pragma once
 
 #include "directx/compute/computeshader.h"
+#include <maya/MFnMesh.h>
+#include <maya/MDagPath.h>
+#include <maya/MFloatPointArray.h>
+#include <maya/MFloatVectorArray.h>
 
 struct DeformVerticesConstantBuffer {
     float gridRotationInverse[4][4];
@@ -22,8 +26,11 @@ public:
         const ComPtr<ID3D11UnorderedAccessView>& normalsUAV,
         const ComPtr<ID3D11ShaderResourceView>& originalVertPositionsSRV,
         const ComPtr<ID3D11ShaderResourceView>& originalNormalsSRV,
-        const ComPtr<ID3D11ShaderResourceView>& particlesSRV
-    ) : ComputeShader(IDR_SHADER1), positionsUAV(positionsUAV), normalsUAV(normalsUAV), originalVertPositionsSRV(originalVertPositionsSRV), originalNormalsSRV(originalNormalsSRV), particlesSRV(particlesSRV)
+        const ComPtr<ID3D11ShaderResourceView>& particlesSRV,
+        const std::vector<uint>& exportVertexIdMap
+    ) : ComputeShader(IDR_SHADER1), positionsUAV(positionsUAV), normalsUAV(normalsUAV), 
+                                    originalVertPositionsSRV(originalVertPositionsSRV), originalNormalsSRV(originalNormalsSRV), 
+                                    particlesSRV(particlesSRV), exportVertexIdMap(exportVertexIdMap)
     {
         initializeBuffers(numParticles, vertexCount, gridRotationInverse, originalParticles, vertexVoxelIds);
     }
@@ -43,8 +50,41 @@ public:
         particlesSRV = srv;
     };
 
+    /**
+     * Copies the deformed vertex positions and normals to the given mesh. 
+     * The mesh must have the same number of verts/normals as used to create this compute shader.
+     * This is primarily intended for exporting the deformed geometry to Alembic, which doesn't support custom shapes.
+     */
+    void copyGeometryDataToMesh(const MDagPath& meshDagPath) {
+        MFnMesh meshFn(meshDagPath);
+        MStatus status;
+
+        const ComPtr<ID3D11Buffer>& positionsBuffer = DirectX::getBufferFromView(positionsUAV);
+        const ComPtr<ID3D11Buffer>& normalsBuffer = DirectX::getBufferFromView(normalsUAV);
+
+        // Need a vector for positions (see note below about logical vs. extracted vertices)
+        std::vector<float> positionData;
+        DirectX::copyBufferToVector(positionsBuffer, positionData);
+        DirectX::copyBufferToPointer(normalsBuffer, (void*)meshFn.getRawNormals(&status));
+
+        // The extracted vertex data has redundant vertices, split by normals and UVs, etc. The MFnMesh only wants logical vertices.
+        // So we need to use the exportVertexIdMap to map from one scheme to the other. The positions of the redundant vertices are identical.
+        float* rawPositions = const_cast<float*>(meshFn.getRawPoints(&status));
+
+        for (size_t i = 0; i < exportVertexIdMap.size(); i++) {
+            uint mayaVertexId = exportVertexIdMap[i]; // Map extracted vertex ID to logical vertex ID
+            // This will overwrite positions multiple times, but they should all be identical for the same logical vertex.
+            rawPositions[mayaVertexId * 3] = positionData[i * 3];
+            rawPositions[mayaVertexId * 3 + 1] = positionData[i * 3 + 1];
+            rawPositions[mayaVertexId * 3 + 2] = positionData[i * 3 + 2];
+        }
+
+        meshFn.updateSurface();
+    }
+
 private:
     int numWorkgroups = 0;
+    std::vector<uint> exportVertexIdMap;
 
     // Inputs
     ComPtr<ID3D11UnorderedAccessView> positionsUAV;
@@ -114,5 +154,4 @@ private:
         constants.vertexCount = vertexCount;
         constantsBuffer = DirectX::createConstantBuffer<DeformVerticesConstantBuffer>(constants);
     }
-
 };
