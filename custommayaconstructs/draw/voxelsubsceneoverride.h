@@ -154,6 +154,7 @@ private:
     std::unordered_map<MString, unique_ptr<MIndexBuffer>, Utils::MStringHash, Utils::MStringEq> meshIndexBuffers; // Stored by render item name, so we can update them easily.
     std::vector<uint32_t> allMeshIndices; // Mesh vertex indices, _not_ split per render item but rather for the entire mesh.
     std::unordered_set<MUint64> meshRenderItemIDs;
+    std::vector<uint32_t> extractedVertexIdMap; // Maps extracted vertex IDs to original vertex IDs (see getVertexIdMapping)
 
     unique_ptr<MVertexBuffer> voxelVertexBuffer;
     std::unordered_map<MGeometry::Primitive, unique_ptr<MIndexBuffer>> voxelIndexBuffers;
@@ -677,6 +678,25 @@ private:
         return extractor.vertexCount(); 
     }
 
+    // This extracts a mapping from the geometry extractor vertices to the original mesh vertices.
+    // The two are not 1:1 because the geometry extractor may have to split vertices to satisfy per-face shader requirements (split normals, UVs, etc).
+    // Right now, we use this primarily during simulation export. (See VoxelShape.h and DeformVerticesCompute.h)
+    void getVertexIdMapping(
+        const MGeometryExtractor& extractor
+    ) {
+        // The data must be requested as floats, but we'll cast and store as uints.
+        MVertexBufferDescriptor vertexIdDesc("", MGeometry::kTexture, MGeometry::kFloat, 1);
+        vertexIdDesc.setSemanticName("vertexid");
+
+        unsigned int vertexCount = extractor.vertexCount();
+        std::vector<float> data(vertexCount, 0.0f);
+        extractor.populateVertexBuffer(data.data(), vertexCount, vertexIdDesc);
+
+        for (unsigned int i = 0; i < vertexCount; ++i) {
+            extractedVertexIdMap.push_back(static_cast<uint>(data[i]));
+        }
+    }
+
     void updateSelectionGranularity(
 		const MDagPath& path,
 		MSelectionContext& selectionContext) 
@@ -759,14 +779,12 @@ private:
 
     void createVoxelGeometryBuffers() {
         voxelIndexBuffers.clear();
-        voxelVertexBuffer = nullptr;
 
         MVertexBufferDescriptor posDesc("", MGeometry::kPosition, MGeometry::kFloat, 3);
-        auto posVB = make_unique<MVertexBuffer>(posDesc);
-        float* posData = static_cast<float*>(posVB->acquire(8, true));
+        voxelVertexBuffer = make_unique<MVertexBuffer>(posDesc);
+        float* posData = static_cast<float*>(voxelVertexBuffer->acquire(8, true));
         std::copy(cubeCornersFlattened.begin(), cubeCornersFlattened.end(), posData);
-        posVB->commit(posData);
-        voxelVertexBuffer = std::move(posVB);
+        voxelVertexBuffer->commit(posData);
 
         auto makeIndexBuffer = [&](MGeometry::Primitive prim, const auto& src) {
             auto buf = make_unique<MIndexBuffer>(MGeometry::kUnsignedInt32);
@@ -865,9 +883,11 @@ private:
         // The voxel shape needs the whole mesh's vertex indices to tag each vertex with the voxel it belongs to.
         // It's important to do the tagging using the vertex buffer that MGeometryExtractor provides.
         unsigned int numVertices = getAllMeshIndices(extractor);
+        getVertexIdMapping(extractor);
                 
         voxelShape->initializeDeformVerticesCompute(
             allMeshIndices,
+            extractedVertexIdMap,
             numVertices,
             positionsUAV,
             normalsUAV,

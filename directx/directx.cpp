@@ -81,6 +81,72 @@ ComPtr<ID3D11UnorderedAccessView> DirectX::createUAV(
     return uav;
 }
 
+void DirectX::copyBufferToBuffer(
+    const ComPtr<ID3D11View>& srcView,
+    const ComPtr<ID3D11View>& dstView
+) {
+
+    ComPtr<ID3D11Resource> srcResource;
+    srcView->GetResource(srcResource.GetAddressOf());
+    ComPtr<ID3D11Resource> dstResource;
+    dstView->GetResource(dstResource.GetAddressOf());
+
+    D3D11_BUFFER_DESC srcDesc{}, dstDesc{};
+    ComPtr<ID3D11Buffer> srcBuffer, dstBuffer;
+    srcResource.As(&srcBuffer);
+    dstResource.As(&dstBuffer);
+    srcBuffer->GetDesc(&srcDesc);
+    dstBuffer->GetDesc(&dstDesc);
+
+    UINT copySize = (srcDesc.ByteWidth < dstDesc.ByteWidth) ? srcDesc.ByteWidth : dstDesc.ByteWidth;
+    D3D11_BOX srcBox = { 0, 0, 0, copySize, 1, 1 };
+
+    DirectX::getContext()->CopySubresourceRegion(
+        dstResource.Get(),
+        0, 0, 0, 0,
+        srcResource.Get(),
+        0, &srcBox
+    );
+}
+
+void DirectX::copyBufferToPointer(
+    const ComPtr<ID3D11Buffer>& buffer,
+    void* outData
+) {
+        D3D11_BUFFER_DESC desc;
+        buffer->GetDesc(&desc);
+
+        // Create a staging buffer (CPU read)
+        D3D11_BUFFER_DESC stagingDesc = {};
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.ByteWidth = desc.ByteWidth;
+        stagingDesc.BindFlags = 0;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        stagingDesc.MiscFlags = 0;
+        stagingDesc.StructureByteStride = desc.StructureByteStride;
+
+        ComPtr<ID3D11Buffer> staging;
+        HRESULT hr = dxDevice->CreateBuffer(&stagingDesc, nullptr, staging.GetAddressOf());
+
+        // Copy GPU buffer to staging buffer and then map it back to CPU memory
+        dxContext->CopyResource(staging.Get(), buffer.Get());
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = dxContext->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        memcpy(outData, mapped.pData, desc.ByteWidth);
+        dxContext->Unmap(staging.Get(), 0);
+}
+
+ComPtr<ID3D11Buffer> DirectX::getBufferFromView(
+    const ComPtr<ID3D11View>& view
+) {
+    ComPtr<ID3D11Resource> resource;
+    view->GetResource(resource.GetAddressOf());
+
+    ComPtr<ID3D11Buffer> buffer;
+    resource.As(&buffer);
+    return buffer;
+}
+
 /**
  * It's a courtesy to let Maya know how much GPU memory we're using, so it can
  * evict other things if necessary.

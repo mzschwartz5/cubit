@@ -6,6 +6,7 @@
 #include <maya/MFnDependencyNode.h>
 #include <maya/MCallbackIdArray.h>
 #include <maya/MNodeMessage.h>
+#include <maya/MFnUnitAttribute.h>
 #include "../../voxelizer.h"
 #include "../usernodes/pbdnode.h"
 #include "../data/particledata.h"
@@ -35,6 +36,7 @@ public:
     inline static MObject aTrigger;
     inline static MObject aInteriorMaterial;
     inline static MObject aExporting; // Used to indicate that an export is in progress
+    inline static MObject aExportDummyTime; // NOT an attribute on this node, but added dynamically to the original mesh on export to mark it as time-dynamic.
 
     static void* creator() { return new VoxelShape(); }
     
@@ -98,6 +100,11 @@ public:
         nAttr.setWritable(true);
         nAttr.setReadable(false);
         status = addAttribute(aExporting);
+        CHECK_MSTATUS_AND_RETURN_IT(status);
+
+        // Purposefully NOT added as an attribute to this node (see note above)
+        MFnUnitAttribute uAttr;
+        aExportDummyTime = uAttr.create("exportDummyTime", "edt", MFnUnitAttribute::kTime, 0.0);
         CHECK_MSTATUS_AND_RETURN_IT(status);
 
         return MS::kSuccess;
@@ -177,6 +184,7 @@ public:
      */
     void initializeDeformVerticesCompute(
         const std::vector<uint>& vertexIndices,
+        const std::vector<uint>& exportVertexIdMap, // used for export only
         const unsigned int numVertices,
         const ComPtr<ID3D11UnorderedAccessView>& positionsUAV,
         const ComPtr<ID3D11UnorderedAccessView>& normalsUAV,
@@ -202,7 +210,8 @@ public:
             normalsUAV,
             originalPositionsUAV,
             originalNormalsSRV,
-            particleSRVData.get()->getSRV()
+            particleSRVData.get()->getSRV(),
+            exportVertexIdMap
         );
 
         isInitialized = true;
@@ -351,6 +360,13 @@ private:
         pbdNode->mergeRenderParticles();
         deformVerticesCompute.dispatch();
 
+        // During export, we copy the vertices and normals back to the original mesh because AbcExport doesn't support custom shapes.
+        MDataHandle exportingHandle = dataBlock.inputValue(aExporting);
+        bool isExporting = exportingHandle.asBool();
+        if (isExporting) {
+            deformVerticesCompute.copyGeometryDataToMesh(pathToOriginalGeometry());
+        }
+
         return MS::kSuccess;
     }
 
@@ -414,6 +430,17 @@ private:
         originalGeomDagNode.setIntermediateObject(!isExporting);
 
         voxelShape->updateMeshVisibility = true;
+
+        // Add a time-driven attribute and connect to global time so that AbcExport sees the mesh as time-dynamic.
+        // Otherwise it will export a static mesh.
+        MFnDependencyNode meshDepNode(originalGeomPath.node());
+        if (isExporting) {
+            meshDepNode.addAttribute(aExportDummyTime);
+            MPlug timeAttrPlug = meshDepNode.findPlug(aExportDummyTime, false);
+            Utils::connectPlugs(Utils::getGlobalTimePlug(), timeAttrPlug);
+        } else {
+            meshDepNode.removeAttribute(aExportDummyTime);
+        }
     }
 
     void postConstructor() override {
