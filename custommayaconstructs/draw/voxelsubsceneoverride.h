@@ -154,7 +154,6 @@ private:
     std::unordered_map<MString, unique_ptr<MIndexBuffer>, Utils::MStringHash, Utils::MStringEq> meshIndexBuffers; // Stored by render item name, so we can update them easily.
     std::vector<uint32_t> allMeshIndices; // Mesh vertex indices, _not_ split per render item but rather for the entire mesh.
     std::unordered_set<MUint64> meshRenderItemIDs;
-    std::vector<uint32_t> extractedVertexIdMap; // Maps extracted vertex IDs to original vertex IDs (see getVertexIdMapping)
 
     unique_ptr<MVertexBuffer> voxelVertexBuffer;
     std::unordered_map<MGeometry::Primitive, unique_ptr<MIndexBuffer>> voxelIndexBuffers;
@@ -508,7 +507,13 @@ private:
         const MShaderManager* shaderManager = renderer->getShaderManager();
         if (!shaderManager) return nullptr;
 
-        MShaderInstance* shaderInstance = shaderManager->getShaderFromNode(shaderNode, geomDagPath);
+        // During export, simplify the geometry requirements with a default shader. Having only position and normal semantic reqs makes 
+        // mapping the VoxelShape geometry back to the native mesh (the export target) much easier.
+        bool isExporting = MPlug(voxelShapeObj, VoxelShape::aExporting).asBool();
+        MShaderInstance* shaderInstance = isExporting ? 
+            shaderManager->getStockShader(MShaderManager::k3dDefaultMaterialShader) :
+            shaderManager->getShaderFromNode(shaderNode, geomDagPath);
+
         if (!shaderInstance) return nullptr;
 
         shaderInstance->requiredVertexBuffers(vertexBufferDescriptors);
@@ -681,20 +686,26 @@ private:
     // This extracts a mapping from the geometry extractor vertices to the original mesh vertices.
     // The two are not 1:1 because the geometry extractor may have to split vertices to satisfy per-face shader requirements (split normals, UVs, etc).
     // Right now, we use this primarily during simulation export. (See VoxelShape.h and DeformVerticesCompute.h)
-    void getVertexIdMapping(
+    std::vector<uint> getVertexIdMapping(
         const MGeometryExtractor& extractor
     ) {
+        std::vector<uint> extractedVertexIdMap;
+
         // The data must be requested as floats, but we'll cast and store as uints.
         MVertexBufferDescriptor vertexIdDesc("", MGeometry::kTexture, MGeometry::kFloat, 1);
         vertexIdDesc.setSemanticName("vertexid");
 
         unsigned int vertexCount = extractor.vertexCount();
+        extractedVertexIdMap.resize(vertexCount);
+
         std::vector<float> data(vertexCount, 0.0f);
         extractor.populateVertexBuffer(data.data(), vertexCount, vertexIdDesc);
 
         for (unsigned int i = 0; i < vertexCount; ++i) {
-            extractedVertexIdMap.push_back(static_cast<uint>(data[i]));
+            extractedVertexIdMap[i] = static_cast<uint>(data[i]);
         }
+
+        return extractedVertexIdMap;
     }
 
     void updateSelectionGranularity(
@@ -811,22 +822,6 @@ private:
         setGeometryForRenderItem(renderItem, vbArray, *voxelIndexBuffers[primitiveType].get(), &bounds);
     }
 
-    void setMeshRenderItemsVisibility(
-        MSubSceneContainer& container,
-        bool visible
-    ) {
-        MSubSceneContainer::Iterator* it = container.getIterator();
-        it->reset();
-        MRenderItem* item = nullptr;
-
-        while ((item = it->next()) != nullptr) {
-            if (meshRenderItemIDs.find(item->InternalObjectId()) == meshRenderItemIDs.end()) continue;
-            item->enable(visible);
-        }
-
-        it->destroy();
-    }
-
     /**
      * Creates the actual, visible, voxelized mesh render items (multiple, possibly, if the original, unvoxelized mesh has multiple shaders / face sets).
      */
@@ -872,18 +867,20 @@ private:
         // Use an effectively infinite bounding box because the voxel shape can deform and shatter.
         double bound = 1e10;
         const MBoundingBox bounds(MPoint(-bound, -bound, -bound), MPoint(bound, bound, bound));
+        bool isExporting = MPlug(voxelShapeObj, VoxelShape::aExporting).asBool();
         for (const RenderItemInfo& itemInfo : renderItemInfos) {
             MIndexBuffer* rawIndexBuffer = createMeshIndexBuffer(itemInfo, extractor);
             if (!rawIndexBuffer) continue;
 
             MRenderItem* renderItem = createSingleMeshRenderItem(container, itemInfo);
+            renderItem->enable(!isExporting); // the mesh used for export should be hidden; it's only used to update the original mesh
             setGeometryForRenderItem(*renderItem, vertexBufferArray, *rawIndexBuffer, &bounds);
         }
 
         // The voxel shape needs the whole mesh's vertex indices to tag each vertex with the voxel it belongs to.
         // It's important to do the tagging using the vertex buffer that MGeometryExtractor provides.
         unsigned int numVertices = getAllMeshIndices(extractor);
-        getVertexIdMapping(extractor);
+        const std::vector<uint> extractedVertexIdMap = getVertexIdMapping(extractor);
                 
         voxelShape->initializeDeformVerticesCompute(
             allMeshIndices,
@@ -956,9 +953,7 @@ public:
         const MFrameContext& frameContext) const override
     {
         bool rebuildGeometry = voxelShape->requiresGeometryRebuild();
-        bool meshVisibilityUpdate = voxelShape->requiresMeshVisibilityUpdate();
-
-        return shouldUpdate || rebuildGeometry || meshVisibilityUpdate;
+        return shouldUpdate || rebuildGeometry;
     }
 
     /**
@@ -974,12 +969,6 @@ public:
             container.clear();
             voxelShape->clearGeometryRebuildFlag();
             editModeChanged = true;
-        }
-        
-        if (voxelShape->requiresMeshVisibilityUpdate()) {
-            voxelShape->clearMeshVisibilityUpdateFlag();
-            bool visible = !(MPlug(voxelShapeObj, VoxelShape::aExporting).asBool());
-            setMeshRenderItemsVisibility(container, visible);
         }
 
         if (container.count() <= 0) {
