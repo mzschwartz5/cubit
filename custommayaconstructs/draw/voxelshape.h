@@ -28,6 +28,7 @@ public:
     inline static MTypeId id = { 0x0012A3B4 };
     inline static MString typeName = "VoxelShape";
     inline static MString drawDbClassification = "drawdb/subscene/voxelSubsceneOverride/voxelshape";
+    inline static MString exportDummyTimeAttrName = "exportDummyTime";
     
     inline static MObject aInputGeom;
     inline static MObject aParticleSRV;
@@ -104,7 +105,7 @@ public:
 
         // Purposefully NOT added as an attribute to this node (see note above)
         MFnUnitAttribute uAttr;
-        aExportDummyTime = uAttr.create("exportDummyTime", "edt", MFnUnitAttribute::kTime, 0.0);
+        aExportDummyTime = uAttr.create(exportDummyTimeAttrName, "edt", MFnUnitAttribute::kTime, 0.0);
         CHECK_MSTATUS_AND_RETURN_IT(status);
 
         return MS::kSuccess;
@@ -122,7 +123,7 @@ public:
         // Relegate the old shape to an intermediate object
         MFnDagNode oldShapeDagNode(voxelMeshDagPath);
         oldShapeDagNode.setIntermediateObject(true);
-
+        
         Utils::connectPlugs(voxelMeshDagPath.node(), MString("outMesh"), newShapeObj, aInputGeom);
         Utils::connectPlugs(pbdNodeObj, PBDNode::aTriggerOut, newShapeObj, aTrigger);
         Utils::connectPlugs(pbdNodeObj, PBDNode::aParticleData, newShapeObj, aParticleData);
@@ -310,19 +311,10 @@ public:
         rebuildGeometry = false;
     }
 
-    bool requiresMeshVisibilityUpdate() const {
-        return updateMeshVisibility;
-    }
-
-    void clearMeshVisibilityUpdateFlag() {
-        updateMeshVisibility = false;
-    }
-
 private:
     bool isInitialized = false;
     bool isParticleSRVPlugDirty = false;
     bool rebuildGeometry = false;
-    bool updateMeshVisibility = false;
     MCallbackIdArray callbackIds;
     EventBase::Unsubscribe unsubPaintStateChanges;
     DeformVerticesCompute deformVerticesCompute;
@@ -429,7 +421,9 @@ private:
         MFnDagNode originalGeomDagNode(originalGeomPath);
         originalGeomDagNode.setIntermediateObject(!isExporting);
 
-        voxelShape->updateMeshVisibility = true;
+        // We rebuild the geometry for export in order to exclude UVs, which necessitate more vertex splitting -> more data to 
+        // update each export frame, and complicate mapping normals back to the original geometry.
+        voxelShape->rebuildGeometry = true;
 
         // Add a time-driven attribute and connect to global time so that AbcExport sees the mesh as time-dynamic.
         // Otherwise it will export a static mesh.
@@ -439,7 +433,9 @@ private:
             MPlug timeAttrPlug = meshDepNode.findPlug(aExportDummyTime, false);
             Utils::connectPlugs(Utils::getGlobalTimePlug(), timeAttrPlug);
         } else {
-            meshDepNode.removeAttribute(aExportDummyTime);
+            if (meshDepNode.hasAttribute(exportDummyTimeAttrName)) {
+                meshDepNode.removeAttribute(aExportDummyTime);
+            }
         }
     }
 
