@@ -37,7 +37,6 @@ public:
     inline static MObject aTrigger;
     inline static MObject aInteriorMaterial;
     inline static MObject aExporting; // Used to indicate that an export is in progress
-    inline static MObject aExportDummyTime; // NOT an attribute on this node, but added dynamically to the original mesh on export to mark it as time-dynamic.
 
     static void* creator() { return new VoxelShape(); }
     
@@ -103,11 +102,6 @@ public:
         status = addAttribute(aExporting);
         CHECK_MSTATUS_AND_RETURN_IT(status);
 
-        // Purposefully NOT added as an attribute to this node (see note above)
-        MFnUnitAttribute uAttr;
-        aExportDummyTime = uAttr.create(exportDummyTimeAttrName, "edt", MFnUnitAttribute::kTime, 0.0);
-        CHECK_MSTATUS_AND_RETURN_IT(status);
-
         return MS::kSuccess;
     }
    
@@ -123,6 +117,12 @@ public:
         // Relegate the old shape to an intermediate object
         MFnDagNode oldShapeDagNode(voxelMeshDagPath);
         oldShapeDagNode.setIntermediateObject(true);
+
+        // Add a time-driven dummy attribute for use during export so that AbcExport sees the mesh as time-dynamic.
+        // Otherwise it will export a static mesh.
+        MFnUnitAttribute uAttr;
+        MObject dummyTimeAttr = uAttr.create(exportDummyTimeAttrName, "edt", MFnUnitAttribute::kTime, 0.0);
+        MFnDependencyNode(voxelMeshDagPath.node()).addAttribute(dummyTimeAttr);
         
         Utils::connectPlugs(voxelMeshDagPath.node(), MString("outMesh"), newShapeObj, aInputGeom);
         Utils::connectPlugs(pbdNodeObj, PBDNode::aTriggerOut, newShapeObj, aTrigger);
@@ -425,18 +425,10 @@ private:
         // update each export frame, and complicate mapping normals back to the original geometry.
         voxelShape->rebuildGeometry = true;
 
-        // Add a time-driven attribute and connect to global time so that AbcExport sees the mesh as time-dynamic.
-        // Otherwise it will export a static mesh.
+        // (Dis)connect the old mesh's dummy time plug to global time so that AbcExport sees the mesh as time-dynamic.
         MFnDependencyNode meshDepNode(originalGeomPath.node());
-        if (isExporting) {
-            meshDepNode.addAttribute(aExportDummyTime);
-            MPlug timeAttrPlug = meshDepNode.findPlug(aExportDummyTime, false);
-            Utils::connectPlugs(Utils::getGlobalTimePlug(), timeAttrPlug);
-        } else {
-            if (meshDepNode.hasAttribute(exportDummyTimeAttrName)) {
-                meshDepNode.removeAttribute(aExportDummyTime);
-            }
-        }
+        MPlug timeAttrPlug = meshDepNode.findPlug(exportDummyTimeAttrName, false);
+        Utils::connectPlugs(Utils::getGlobalTimePlug(), timeAttrPlug, !isExporting);
     }
 
     void postConstructor() override {

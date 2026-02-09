@@ -234,10 +234,22 @@ MPlug getGlobalTimePlug() {
 
 void connectPlugs(
     const MPlug& srcPlug,
+    const MPlug& dstPlug,
+    bool breakConnection
+) {
+    MDGModifier dgMod;
+    breakConnection ?
+        dgMod.disconnect(srcPlug, dstPlug) :
+        dgMod.connect(srcPlug, dstPlug);
+    dgMod.doIt();
+}
+
+void disconnectPlugs(
+    const MPlug& srcPlug,
     const MPlug& dstPlug
 ) {
     MDGModifier dgMod;
-    dgMod.connect(srcPlug, dstPlug);
+    dgMod.disconnect(srcPlug, dstPlug);
     dgMod.doIt();
 }
 

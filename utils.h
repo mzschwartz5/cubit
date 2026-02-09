@@ -143,7 +143,8 @@ void connectPlugs(
     const MObject& dstNode, 
     const DstAttrT& dstAttr,
     int srcLogicalIndex = -1,
-    int dstLogicalIndex = -1
+    int dstLogicalIndex = -1,
+    bool breakConnection = false
 ) {
     MPlug srcPlug = plugFromAttr(srcNode, srcAttr);
     MPlug dstPlug = plugFromAttr(dstNode, dstAttr);
@@ -156,14 +157,14 @@ void connectPlugs(
         dstPlug = dstPlug.elementByLogicalIndex(dstLogicalIndex);
     }
 
-    connectPlugs(srcPlug, dstPlug);
+    connectPlugs(srcPlug, dstPlug, breakConnection);
 }
 
 void connectPlugs(
     const MPlug& srcPlug,
-    const MPlug& dstPlug
+    const MPlug& dstPlug,
+    bool breakConnection = false
 );
-
 
 void removePlugMultiInstance(const MPlug& plug, int logicalIndexToRemove = -1);
 
