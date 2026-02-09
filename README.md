@@ -27,9 +27,13 @@ ___
   - [Drag tool settings](#drag-tool-settings)
 - [Adding primitive colliders](#adding-primitive-colliders)
 - [Global simulation settings](#global-simulation-settings)
+  - [Solver settings](#solver-settings)
+  - [Cache settings](#cache-settings)
+- [Exporting to Alembic](#exporting-to-alembic)
 - [Roadmap](#issue-roadmap)
 - [Developing the plug-in](#developing-the-plug-in)
   - [Development requirements](#development-requirements)
+  - [Misc](#Misc)
 - [License](#license)
 
 # Installing the plugin
@@ -37,11 +41,11 @@ ___
 ### Installation requirements
 
 - Windows OS (for DirectX11 + Maya Viewport 2.0)
-- Maya 2025+ (may work in lower versions but only tested in Maya 2025)
+- Maya 2025 or 2026 (choose the corresponding `.mll` binary from the `bin` folder, for your Maya version)
 
 ### Installation steps
 
-- Download the `cubit.mll` file (in the root directory) and put it in your plugin directory. Then load it up from Maya's plugin manager (Windows > Settings and Preferences > Plug-in Manager). If you don't know your plugin directory path, look at the plug-in manager for examples.
+- Download the `cubit_maya202X.mll` file (in the `bin` directory), according to your Maya version, and put it in your plugin directory. Then load it up from Maya's plugin manager (Windows > Settings and Preferences > Plug-in Manager). If you don't know your plugin directory path, look at the plug-in manager for examples.
 - Ensure the `dx11Shader.mll` plugin is loaded in the plugin manager.
 - Enable Viewport 2.0 with DirectX11: `Windows > Settings/Preferences > Preferences > Display > Viewport 2.0 > DirectX 11` (this may require a Maya restart).
 
@@ -210,6 +214,8 @@ These settings are all keyable.
 In addition to the per-mesh simulation settings [discussed previously](#mesh-specific-simulation-settings), there are some simulation settings that affect all simulated objects.
 
 ![global simulation settings](images/globalsimulationsettings.PNG)
+
+### Solver settings
 1. **Enable particle collisions**: when enabled, PBD particles can collide with each other. This allows voxels to stack on each other, prevents interpenetration of different parts of a mesh, and allows for multiple meshes to collide with each other.
 1. **Enable primitive collisions**: when enabled, PBD particles will collide with primitive colliders. 
 1. **Substeps per frame**: this setting controls the number of PBD loop iterations performed per frame. Setting this too low can cause under-convergence (often manifests as extra compliance), and setting it too high can have a large impact on performance.
@@ -219,13 +225,39 @@ The reason these settings are global is because particle data must be managed in
 
 These settings are all keyable.
 
+### Cache Settings
+
+_cubit_ ships with a custom caching solution. It does not rely on Maya's internal cached playback, but rather maintains an in-memory cache. Since the underlying technique is inherently non-reversible, the
+cache is the only way to play the simulation backwards, jump to previous frames, and **reset** the simulation. For that reason, even when disabled, the first frame will always be cached.
+
+1. Cache Frequency - determines how often frames are cached. A value of "1" means every frame is cached. Higher values act like checkpoints - the cache budget stretches further, but you cannot play the simulation backwards. A value of 0 effectively disables caching.
+2. Max Cache Size (MB) - controls the size of the cache, in megabytes.
+
+There are a few ways to reset the cache (explicitly and implicitly):
+- Right clicking the timeline > Cached Playback > Flush cubit (plugin) cache.
+- Changing the edit mode of a simulated object (e.g. to or from paint mode).
+- Adding or removing new simulated objects.
+
+
+![Caching in action](images/caching.png)
+
+*Shown above, a way to explicitly reset the cubit cache. The green line on the timeline indicates frames that are cached*
+
+# Exporting to Alembic
+
+Although there currently is not a way to save the simulation to a Maya file (.mb or .ma), you _can_ export the scene to Alembic. This can be done via the top-level _cubit_ menu's "Export to Alembic" option.
+
+A few notes about exporting to alembic:
+- You may want to check certain settings in the export window (under Advanced Options), such as "UV write", "Write Face Sets", etc, if you want to be able to texture and shade the model in whatever software you import it to.
+- Specifically, if you want to be able to shade the interior of the mesh in another software, make sure to first [assign a material to the mesh interior](https://github.com/mzschwartz5/cubit?tab=readme-ov-file#assign-a-material-to-the-mesh-interior) in Maya, before exporting, and select "Write Face Sets" in the alembic export window. This will ensure that separate face sets / materials are exported and can be assigned to after import.
+
 <a id="issue-roadmap"></a>
 # 🚧 Roadmap
 
 There are still several features under development (though currently on pause), and many bugs as well. You can view them all in repo's [issues](https://github.com/mzschwartz5/cubit/issues). There are a few high-priority enhancements to call out here, though:
 
-1. [Support for saving scenes with the _cubit_ plugin!](https://github.com/mzschwartz5/cubit/issues/45) Pretty important obviously, it just didn't make the beta cut. Similarly - [the ability to reset the simulation](https://github.com/mzschwartz5/cubit/issues/36) to the beginning or cached frames.
-1. [Support for recording and playing back interactions with the drag tool.](https://github.com/mzschwartz5/cubit/issues/77) Right now, interaction is just for fun and testing; it cannot be rendered out. With record and replay, it could be included in the render.
+1. [Support for saving scenes with the _cubit_ plugin!](https://github.com/mzschwartz5/cubit/issues/45) Pretty important obviously, it just didn't make the beta cut. You _can_ export the simulation to Alembic though (see above).
+1. [Support for recording and playing back interactions with the drag tool.](https://github.com/mzschwartz5/cubit/issues/77) Right now, mouse interaction is mostly for fun and testing; the only way to render out user interaction is if it's captured in the cache. I'd like more robust feature support here.
 1. [Support for using voxelization vertex attributes in custom interior shaders.](https://github.com/mzschwartz5/cubit/issues/41) Basically, right now you can assign a shader to the interior of the voxelized mesh, but your shader does not have access to some key information about the voxelized mesh that could greatly help create interesting volumetric effects. 
 
 # Developing the plug-in
@@ -241,6 +273,8 @@ Debug configuration: builds dependencies as DLLs and puts them alongside the plu
 
 Release configuration: builds dependencies as static libs. Slower to build, but easier to distribute / consume. Release builds, of course, will run much faster as well.
 
+### Misc
+- Currently, to build for a specific Maya version, you must change it manually in the `vcxproj` file. I then copy `.mll`'s for each version into the `bin` folder. This could be automated.
 
 # License
 
