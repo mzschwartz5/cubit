@@ -1,9 +1,9 @@
 # cubit
 
-https://github.com/user-attachments/assets/d03771ff-d3f1-4399-97ff-8702167c6586
-
 <p align="center">
-  <em>Spot the Cow simulated with anisotropic strain limits - first dropped and broken into slices, then thrown and shattered via mouse interaction </em>
+  <img src="https://github.com/user-attachments/assets/cb6fdf97-2341-4873-97a1-a3e6bed21a8c" alt="CubitDemo" />
+  <br/>
+  <em>Spot the Cow simulated with anisotropic strain limits - first dropped and broken into slices, then thrown and shattered via mouse interaction</em>
 </p>
 
 Cubit is a Maya plugin for the simulation of soft-body deformation and fracture, in real-time.* _cubit_ works by creating a voxelized version of an input mesh and using the voxels as deformation lattices for the vertices within. The simulation itself is based on Position Based Dynamics (PBD), using special voxelized gram-schmidt (VGS) constraints both within and between voxels to achieve both deformation and fracture. The technique originates from [this paper](https://web.ics.purdue.edu/~tmcgraw/papers/voxel_2025.pdf) by Tim McGraw and Xinyi Zhou.
