@@ -372,6 +372,13 @@ MDagPath getDagPathFromName(const MString& name) {
     return dagPath;
 }
 
+bool isDagObjectVisible(const MObject& object) {
+    MDagPath dagPath;
+    MStatus status = MDagPath::getAPathTo(object, dagPath);
+    if (status != MS::kSuccess) return false; // Not a DAG object
+    return dagPath.isVisible();
+}
+
 // Use MEL to query and perform linking (in this case, C++ is _much_ more verbose and this isn't performance critical)
 void transferUVLinks(const MDagPath& srcMeshPath, const MDagPath& dstMeshPath) {
     MFnMesh srcMeshFn(srcMeshPath);

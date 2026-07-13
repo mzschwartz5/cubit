@@ -106,14 +106,12 @@ private:
     using RenderItemFaceIdxMap = std::unordered_map<MString, std::vector<uint32_t>, Utils::MStringHash, Utils::MStringEq>;
     
     bool shouldUpdate = true;
-    bool selectionChanged = false;
-    bool editModeChanged = true;
+    bool shouldUpdateMeshRenderItems = true;
     bool hideAllowed = true;
-    bool hoveredVoxelChanged = false;
+    bool shapeVisible = true; // cached visibility of the DAG object (not of the voxels themselves)
+    VoxelEditMode currentEditMode = VoxelEditMode::Object; // this shape's current edit mode
     EventBase::Unsubscribe unsubscribeFromVoxelEditModeChanges;
     MCallbackIdArray callbackIds;
-    MMatrixArray selectedVoxelMatrices;
-    MMatrixArray hoveredVoxelMatrices; // Will only ever have 0 or 1 matrix in it.
     std::unordered_set<uint> voxelsToHide;
     std::vector<uint> visibleVoxelIdToGlobalId;  // maps visible voxel instance IDs to global voxel IDs (including hidden ones)
     RenderItemFaceIdxMap hiddenFaces;            // hidden face indices per render item
@@ -127,14 +125,22 @@ private:
     inline static const MString voxelSelectedHighlightItemName = "VoxelSelectedHighlightItem";
     inline static const MString voxelPreviewSelectionHighlightItemName = "VoxelPreviewSelectionHighlightItem";
     inline static const MString voxelWireframeRenderItemName = "VoxelWireframeRenderItem";
-    inline static const MString voxelSelectionRenderItemName = "VoxelSelectionItem";
-    // Enabled state of the voxel decoration render items. (Note: actual state may be more restricted; i.e. if instance transform array is empty)
-    std::unordered_map<MString, bool, Utils::MStringHash, Utils::MStringEq> voxelRenderItemsEnabledState = {
-        { voxelSelectedHighlightItemName, false },
-        { voxelPreviewSelectionHighlightItemName, false },
-        { voxelWireframeRenderItemName, false },
-        { voxelSelectionRenderItemName, false }
+    inline static const MString voxelSelectableRenderItemName = "VoxelSelectableItem";
+    
+    struct DecorationRenderItemState {
+        bool enabled;
+        bool requiresUpdate;
+        MMatrixArray matrices;
     };
+
+    std::unordered_map<MString, DecorationRenderItemState, Utils::MStringHash, Utils::MStringEq> decorationRenderItemsState = {
+        { voxelSelectedHighlightItemName, { false, true, MMatrixArray() } },
+        { voxelPreviewSelectionHighlightItemName, { false, true, MMatrixArray() } },  // Will only ever have 0 or 1 matrix in it
+        { voxelWireframeRenderItemName, { false, true, MMatrixArray() } },
+        { voxelSelectableRenderItemName, { false, true, MMatrixArray() } }
+    };
+
+    std::unordered_set<MString, Utils::MStringHash, Utils::MStringEq> meshRenderItems;
 
     ComPtr<ID3D11Buffer> positionsBuffer;
     ComPtr<ID3D11UnorderedAccessView> positionsUAV;
@@ -153,7 +159,6 @@ private:
     std::vector<unique_ptr<MVertexBuffer>> meshVertexBuffers;
     std::unordered_map<MString, unique_ptr<MIndexBuffer>, Utils::MStringHash, Utils::MStringEq> meshIndexBuffers; // Stored by render item name, so we can update them easily.
     std::vector<uint32_t> allMeshIndices; // Mesh vertex indices, _not_ split per render item but rather for the entire mesh.
-    std::unordered_set<MUint64> meshRenderItemIDs;
 
     unique_ptr<MVertexBuffer> voxelVertexBuffer;
     std::unordered_map<MGeometry::Primitive, unique_ptr<MIndexBuffer>> voxelIndexBuffers;
@@ -177,8 +182,13 @@ private:
         const MObjectArray& activeComponents = subscene->voxelShape->activeComponents();
         const MMatrixArray& voxelMatrices = subscene->voxelShape->getVoxels().get()->modelMatrices;
         const std::vector<uint>& visibleVoxelIdToGlobalId = subscene->visibleVoxelIdToGlobalId;
-        subscene->selectedVoxelMatrices.clear();
-        subscene->hoveredVoxelMatrices.clear();
+
+        DecorationRenderItemState& selectedState = subscene->decorationRenderItemsState[voxelSelectedHighlightItemName];
+        DecorationRenderItemState& hoveredState = subscene->decorationRenderItemsState[voxelPreviewSelectionHighlightItemName];
+        MMatrixArray& selectedMatrices = selectedState.matrices;
+        MMatrixArray& hoveredMatrices = hoveredState.matrices;
+        selectedMatrices.clear();
+        hoveredMatrices.clear();
 
         for (const MObject& comp : activeComponents) {
             MFnSingleIndexedComponent fnComp(comp);
@@ -187,12 +197,13 @@ private:
                 if (voxelInstanceId >= (int)visibleVoxelIdToGlobalId.size()) continue;
 
                 const MMatrix& voxelMatrix = voxelMatrices[visibleVoxelIdToGlobalId[voxelInstanceId]];
-                subscene->selectedVoxelMatrices.append(voxelMatrix);
+                selectedMatrices.append(voxelMatrix);
             }
         }
 
+        selectedState.requiresUpdate = true;
+        hoveredState.requiresUpdate = true;
         subscene->shouldUpdate = true;
-        subscene->selectionChanged = true;
         invalidateRecentlyHidden(subscene);
     }
 
@@ -203,13 +214,16 @@ private:
     static void onShowHideStateChange(const MString& procName, unsigned int procId, bool isProcEntry, unsigned int type, void* clientData) {
         // Only need to run this callback once (but it's invoked on entry and exit of the procedure)
         if (!isProcEntry) return;
-        
+
+        // In Object mode, let Maya's hide/show act on the DAG object itself rather than on individual voxels.
+        VoxelSubSceneOverride* subscene = static_cast<VoxelSubSceneOverride*>(clientData);
+        if (subscene->currentEditMode == VoxelEditMode::Object) return;
+
         bool toggleHideCommand = (procName.indexW("toggleVisibilityAndKeepSelection") != -1);
         bool hideCommand = (procName == "hide");
         bool showHiddenCommand = (procName.indexW("showHidden") != -1);
         if (!toggleHideCommand && !hideCommand && !showHiddenCommand) return;
 
-        VoxelSubSceneOverride* subscene = static_cast<VoxelSubSceneOverride*>(clientData);
         subscene->shouldUpdate = true;
 
         if (hideCommand) {
@@ -259,14 +273,19 @@ private:
         bool isPaintMode = (newMode == VoxelEditMode::FacePaint || newMode == VoxelEditMode::ParticlePaint);
         bool isSelectionMode = (newMode == VoxelEditMode::Selection);
 
-        voxelRenderItemsEnabledState[voxelSelectedHighlightItemName] = !(isObjectMode || isPaintMode);
-        voxelRenderItemsEnabledState[voxelPreviewSelectionHighlightItemName] = !(isObjectMode || isPaintMode);
-        voxelRenderItemsEnabledState[voxelSelectionRenderItemName] = !(isObjectMode || isPaintMode);
-        voxelRenderItemsEnabledState[voxelWireframeRenderItemName] = !isObjectMode;
+        DecorationRenderItemState& selectedState = decorationRenderItemsState[voxelSelectedHighlightItemName];
+        DecorationRenderItemState& hoveredState = decorationRenderItemsState[voxelPreviewSelectionHighlightItemName];
+        DecorationRenderItemState& selectableState = decorationRenderItemsState[voxelSelectableRenderItemName];
+        DecorationRenderItemState& wireframeState = decorationRenderItemsState[voxelWireframeRenderItemName];
+
+        selectedState.enabled = !(isObjectMode || isPaintMode);
+        hoveredState.enabled = !(isObjectMode || isPaintMode);
+        selectableState.enabled = !(isObjectMode || isPaintMode);
+        wireframeState.enabled = !isObjectMode;
 
         // If this event is for a different shape, disable everything.
-        for (auto& [itemName, enabled] : voxelRenderItemsEnabledState) {
-            voxelRenderItemsEnabledState[itemName] = (enabled && isThisShape);
+        for (auto& [itemName, state] : decorationRenderItemsState) {
+            decorationRenderItemsState[itemName].enabled = (state.enabled && isThisShape);
         }
                 
         if (isSelectionMode && isThisShape) {
@@ -280,8 +299,13 @@ private:
             voxelShape->subscribeToPaintStateChanges(newMode);
         }
 
+        currentEditMode = isThisShape ? newMode : currentEditMode;
+
+        selectedState.requiresUpdate = true;
+        hoveredState.requiresUpdate = true;
+        selectableState.requiresUpdate = true;
+        wireframeState.requiresUpdate = true;
         shouldUpdate = true;
-        editModeChanged = true;
     }
 
     /**
@@ -312,10 +336,11 @@ private:
     }
 
     void onHoveredVoxelChange(int hoveredVoxelInstanceId) {
-        // Already called this frame (likely because we did a drag-select and this gets called for each intersection)
-        if (hoveredVoxelChanged) return;
+        // Already queued this frame (likely because we did a drag-select and this gets called for each intersection)
+        if (decorationRenderItemsState[voxelPreviewSelectionHighlightItemName].requiresUpdate) return;
         M3dView::active3dView().scheduleRefresh();
         
+        MMatrixArray& hoveredVoxelMatrices = decorationRenderItemsState[voxelPreviewSelectionHighlightItemName].matrices;
         hoveredVoxelMatrices.clear();
         const MMatrixArray& voxelMatrices = voxelShape->getVoxels().get()->modelMatrices;
         
@@ -323,7 +348,7 @@ private:
         hoveredVoxelMatrices.append(voxelMatrices[globalVoxelId]);
 
         shouldUpdate = true;
-        hoveredVoxelChanged = true;
+        decorationRenderItemsState[voxelPreviewSelectionHighlightItemName].requiresUpdate = true;
     }
 
     /**
@@ -331,8 +356,6 @@ private:
      * Unfortunately, there's no faster way to do this, but it's not terribly slow if we use a set for the indices to hide.
      */
     void hideSelectedMeshFaces(MSubSceneContainer& container) {
-        MSubSceneContainer::Iterator* it = container.getIterator();
-        it->reset();
         MRenderItem* item = nullptr;
 
         // Convert voxelsToHide to a map of face indices to hide (where key is face index and value is voxel instance ID)
@@ -357,9 +380,9 @@ private:
         }
 
         // Now go through each (mesh) render item and remove those indices from its index buffer.
-        while ((item = it->next()) != nullptr) {
-            if (meshRenderItemIDs.find(item->InternalObjectId()) == meshRenderItemIDs.end()) continue;
-            const MString& itemName = item->name();
+        for (const MString& itemName : meshRenderItems) {
+            MRenderItem* item = container.find(itemName);
+            if (!item) continue;
 
             // Note: do not get the index buffer from the render item's MGeometry; it seems to be stale / hold an old view of the buffer.
             MIndexBuffer* indexBuffer = meshIndexBuffers[itemName].get();
@@ -382,8 +405,6 @@ private:
             indexBuffer->update(newIndices.data(), 0, static_cast<unsigned int>(newIndices.size()), true /* truncateIfSmaller */);
             updateRenderItemIndexBuffer(item, indexBuffer);
         }
-        
-        it->destroy();
     }
 
     /**
@@ -436,11 +457,17 @@ private:
      * Create new instanced transform arrays for the voxel render items, excluding any hidden voxels.
      */
     void hideSelectedVoxels(MSubSceneContainer& container) {
-        MMatrixArray visibleVoxelMatrices;
-
-        // First of all, the selection highlight render items should show 0 voxels now, so use the cleared array.
-        updateVoxelRenderItem(container, voxelSelectedHighlightItemName, visibleVoxelMatrices);
-        updateVoxelRenderItem(container, voxelPreviewSelectionHighlightItemName, visibleVoxelMatrices);
+        DecorationRenderItemState& selectableState = decorationRenderItemsState[voxelSelectableRenderItemName];
+        DecorationRenderItemState& wireframeState = decorationRenderItemsState[voxelWireframeRenderItemName];
+        DecorationRenderItemState& selectedState = decorationRenderItemsState[voxelSelectedHighlightItemName];
+        DecorationRenderItemState& previewState = decorationRenderItemsState[voxelPreviewSelectionHighlightItemName];
+        MMatrixArray& selectableVoxelMatrices = selectableState.matrices;
+        MMatrixArray& wireframeVoxelMatrices = wireframeState.matrices;
+        
+        selectableVoxelMatrices.clear();
+        wireframeVoxelMatrices.clear();
+        selectedState.matrices.clear();
+        previewState.matrices.clear();
 
         // Filter the voxel matrices array to exclude any hidden voxels.
         const MMatrixArray& allVoxelMatrices = voxelShape->getVoxels().get()->modelMatrices;
@@ -451,16 +478,18 @@ private:
             uint globalVoxelId = visibleVoxelIdToGlobalId[i];
             if (voxelsToHide.find(globalVoxelId) != voxelsToHide.end()) continue;
 
-            visibleVoxelMatrices.append(allVoxelMatrices[globalVoxelId]);
+            wireframeVoxelMatrices.append(allVoxelMatrices[globalVoxelId]);
+            selectableVoxelMatrices.append(allVoxelMatrices[globalVoxelId]);
             newVisibleVoxelIdToGlobalId.push_back(globalVoxelId);
         }
 
         visibleVoxelIdToGlobalId = std::move(newVisibleVoxelIdToGlobalId);
 
-        updateVoxelRenderItem(container, voxelWireframeRenderItemName, visibleVoxelMatrices);
-        updateVoxelRenderItem(container, voxelSelectionRenderItemName, visibleVoxelMatrices);
-
         voxelsToHide.clear();
+        selectableState.requiresUpdate = true;
+        wireframeState.requiresUpdate = true;
+        selectedState.requiresUpdate = true;
+        previewState.requiresUpdate = true;
     }
 
     /**
@@ -468,8 +497,16 @@ private:
      * plus any selected hidden ones.
      */
     void showSelectedVoxels(MSubSceneContainer& container, std::unordered_set<uint>& selectedVoxels, bool highlightSelected = true) {
-        MMatrixArray visibleVoxelMatrices;
-        MMatrixArray selectedVoxelMatrices;
+        DecorationRenderItemState& wireframeState = decorationRenderItemsState[voxelWireframeRenderItemName];
+        DecorationRenderItemState& selectableState = decorationRenderItemsState[voxelSelectableRenderItemName];
+        DecorationRenderItemState& selectedState = decorationRenderItemsState[voxelSelectedHighlightItemName];
+        MMatrixArray& wireframeVoxelMatrices = wireframeState.matrices;
+        MMatrixArray& selectableVoxelMatrices = selectableState.matrices;
+        MMatrixArray& selectedVoxelMatrices = selectedState.matrices;
+
+        wireframeVoxelMatrices.clear();
+        selectableVoxelMatrices.clear();
+        selectedVoxelMatrices.clear();
 
         const MMatrixArray& allVoxelMatrices = voxelShape->getVoxels().get()->modelMatrices;
 
@@ -481,23 +518,38 @@ private:
         std::sort(visibleVoxelIdToGlobalId.begin(), visibleVoxelIdToGlobalId.end());
 
         for (uint globalVoxelId : visibleVoxelIdToGlobalId) {
-            visibleVoxelMatrices.append(allVoxelMatrices[globalVoxelId]);
+            wireframeVoxelMatrices.append(allVoxelMatrices[globalVoxelId]);
+            selectableVoxelMatrices.append(allVoxelMatrices[globalVoxelId]);
         }
 
-        updateVoxelRenderItem(container, voxelSelectedHighlightItemName, selectedVoxelMatrices);
-        updateVoxelRenderItem(container, voxelWireframeRenderItemName, visibleVoxelMatrices);
-        updateVoxelRenderItem(container, voxelSelectionRenderItemName, visibleVoxelMatrices);
-
         selectedVoxels.clear();
+        wireframeState.requiresUpdate = true;
+        selectableState.requiresUpdate = true;
+        selectedState.requiresUpdate = true;
     }
 
     void updateVoxelRenderItem(MSubSceneContainer& container, const MString& itemName, const MMatrixArray& voxelMatrices) {
         MRenderItem* item = container.find(itemName);
-        bool enabled = voxelRenderItemsEnabledState[itemName] && voxelMatrices.length() > 0;
-        item->enable(enabled);
+        if (!item) return;
+        setRenderItemEnabled(item, decorationRenderItemsState[itemName].enabled && voxelMatrices.length() > 0);
 
         if (voxelMatrices.length() == 0) return; // Maya doesn't like setting empty instance arrays.
         setInstanceTransformArray(*item, voxelMatrices);
+    }
+
+    /**
+     * Set the enable state of a render item, respecting the overall visibility of the shape.
+     */
+    void setRenderItemEnabled(MRenderItem* item, bool enabled) {
+        item->enable(enabled && shapeVisible);
+    }
+
+    void markRenderItemsForRefresh() {
+        for (auto& [itemName, state] : decorationRenderItemsState) {
+            state.requiresUpdate = true;
+        }
+
+        shouldUpdateMeshRenderItems = true;
     }
 
     MShaderInstance* getVertexBufferDescriptorsForShader(const MObject& shaderNode, const MDagPath& geomDagPath, MVertexBufferDescriptorList& vertexBufferDescriptors) {
@@ -655,8 +707,9 @@ private:
         renderItem->receivesShadows(true);
         renderItem->setShader(itemInfo.shaderInstance);
         container.add(renderItem);
+        
+        meshRenderItems.insert(itemInfo.renderItemName);
 
-        meshRenderItemIDs.insert(renderItem->InternalObjectId());
         releaseShaderInstance(itemInfo.shaderInstance);
         return renderItem;
     }
@@ -731,12 +784,13 @@ private:
 
         setVoxelGeometryForRenderItem(*renderItem, MGeometry::kLines);
 
-        const MMatrixArray& voxelInstanceTransforms = voxelShape->getVoxels().get()->modelMatrices;
-        setInstanceTransformArray(*renderItem, voxelInstanceTransforms);
+        MMatrixArray& wireframeMatrices = decorationRenderItemsState[voxelWireframeRenderItemName].matrices;
+        wireframeMatrices = voxelShape->getVoxels().get()->modelMatrices;
+        setInstanceTransformArray(*renderItem, wireframeMatrices);
     }
 
-    void createVoxelSelectionRenderItem(MSubSceneContainer& container) {
-        MRenderItem* renderItem = MRenderItem::Create(voxelSelectionRenderItemName, MRenderItem::DecorationItem, MGeometry::kTriangles);
+    void createVoxelSelectableRenderItem(MSubSceneContainer& container) {
+        MRenderItem* renderItem = MRenderItem::Create(voxelSelectableRenderItemName, MRenderItem::DecorationItem, MGeometry::kTriangles);
         MShaderInstance* shader = MRenderer::theRenderer()->getShaderManager()->getStockShader(MShaderManager::k3dDefaultMaterialShader);
         MSharedPtr<MUserData> customData(new SelectionCustomData(
             std::bind(&VoxelSubSceneOverride::onHoveredVoxelChange, this, std::placeholders::_1)
@@ -758,8 +812,9 @@ private:
 
         setVoxelGeometryForRenderItem(*renderItem, MGeometry::kTriangles);
 
-        const MMatrixArray& voxelInstanceTransforms = voxelShape->getVoxels().get()->modelMatrices;
-        setInstanceTransformArray(*renderItem, voxelInstanceTransforms);
+        MMatrixArray& selectableMatrices = decorationRenderItemsState[voxelSelectableRenderItemName].matrices;
+        selectableMatrices = voxelShape->getVoxels().get()->modelMatrices;
+        setInstanceTransformArray(*renderItem, selectableMatrices);
     }
 
     void createVoxelSelectedHighlightRenderItem(MSubSceneContainer& container, const MString& renderItemName, const std::array<float, 4>& color) {
@@ -829,7 +884,6 @@ private:
         MStatus status;
         meshVertexBuffers.clear();
         meshIndexBuffers.clear();
-        meshRenderItemIDs.clear();
         allMeshIndices.clear();
 
         const MDagPath originalGeomPath = voxelShape->pathToOriginalGeometry();
@@ -873,7 +927,7 @@ private:
             if (!rawIndexBuffer) continue;
 
             MRenderItem* renderItem = createSingleMeshRenderItem(container, itemInfo);
-            renderItem->enable(!isExporting); // the mesh used for export should be hidden; it's only used to update the original mesh
+            setRenderItemEnabled(renderItem, !isExporting); // the mesh used for export should be hidden; it's only used to update the original mesh
             setGeometryForRenderItem(*renderItem, vertexBufferArray, *rawIndexBuffer, &bounds);
         }
 
@@ -953,7 +1007,8 @@ public:
         const MFrameContext& frameContext) const override
     {
         bool rebuildGeometry = voxelShape->requiresGeometryRebuild();
-        return shouldUpdate || rebuildGeometry;
+        bool visibilityChanged = (Utils::isDagObjectVisible(voxelShapeObj) != shapeVisible);
+        return shouldUpdate || rebuildGeometry || visibilityChanged;
     }
 
     /**
@@ -965,10 +1020,19 @@ public:
     {
         if (!voxelShape) return;
 
+        // Cache DAG visibility up front so every enable below is gated correctly by setRenderItemEnabled().
+        bool wasVisible = shapeVisible;
+        shapeVisible = Utils::isDagObjectVisible(voxelShapeObj);
+        bool visibilityChanged = (shapeVisible != wasVisible);
+
+        if (visibilityChanged) {
+            markRenderItemsForRefresh();
+        }
+
         if (voxelShape->requiresGeometryRebuild()) {
             container.clear();
             voxelShape->clearGeometryRebuildFlag();
-            editModeChanged = true;
+            markRenderItemsForRefresh();
         }
 
         if (container.count() <= 0) {
@@ -989,32 +1053,11 @@ public:
             // The visible wireframe render item
             createVoxelWireframeRenderItem(container);
             // Invisible item, only gets drawn to the selection buffer to enable selection
-            createVoxelSelectionRenderItem(container);
+            createVoxelSelectableRenderItem(container);
             // Shows highlights for selected voxels
             createVoxelSelectedHighlightRenderItem(container, voxelSelectedHighlightItemName, {0.0f, 1.0f, 0.25f, 0.5f});
             // Shows highlight for hovered voxel
             createVoxelSelectedHighlightRenderItem(container, voxelPreviewSelectionHighlightItemName, {1.0f, 1.0f, 0.0f, 0.5f});
-        }
-
-        if (editModeChanged) {
-            for (const auto& [itemName, enabled] : voxelRenderItemsEnabledState) {
-                MRenderItem* item = container.find(itemName);
-                item->enable(enabled);
-            }
-
-            // Special case: the edit mode may dictate that the preview highlight is enabled, but there may be no hovered voxel, so give the chance to re-disable it.
-            updateVoxelRenderItem(container, voxelPreviewSelectionHighlightItemName, hoveredVoxelMatrices);
-            editModeChanged = false;
-        }
-        
-        if (selectionChanged) {
-            updateVoxelRenderItem(container, voxelSelectedHighlightItemName, selectedVoxelMatrices);
-            selectionChanged = false;
-        }
-
-        if (hoveredVoxelChanged) {
-            updateVoxelRenderItem(container, voxelPreviewSelectionHighlightItemName, hoveredVoxelMatrices);
-            hoveredVoxelChanged = false;
         }
 
         switch (showHideStateChange)
@@ -1037,6 +1080,24 @@ public:
             break;
         }
         showHideStateChange = ShowHideStateChange::None;
+
+        for (const auto& [itemName, state] : decorationRenderItemsState) {
+            if (!state.requiresUpdate) continue;
+            updateVoxelRenderItem(container, itemName, state.matrices);
+
+            decorationRenderItemsState[itemName].requiresUpdate = false;
+        }
+
+        if (shouldUpdateMeshRenderItems) {
+            for (const MString& itemName : meshRenderItems) {
+                MRenderItem* item = container.find(itemName);
+                if (!item) continue;
+
+                setRenderItemEnabled(item, shapeVisible);
+            }
+
+            shouldUpdateMeshRenderItems = false;
+        }
 
         shouldUpdate = false;
     }

@@ -191,6 +191,10 @@ bool tryGetShapePathFromObject(const MObject& object, MDagPath& shapePath);
 
 MDagPath getDagPathFromName(const MString& name);
 
+// Returns whether a DAG object would be drawn, accounting for its own visibility, its ancestors'
+// visibility, display layers, intermediate-object state, etc. Returns false for non-DAG objects.
+bool isDagObjectVisible(const MObject& object);
+
 /**
  * Transfers UV set links from the source mesh to the destination mesh. Assumes both meshes have the same UV sets and shading engines.
  * 

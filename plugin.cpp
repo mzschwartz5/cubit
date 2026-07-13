@@ -270,7 +270,7 @@ EXPORT MStatus initializePlugin(MObject obj)
 	CHECK_MSTATUS(status);
 	status = plugin.registerShape(VoxelShape::typeName, VoxelShape::id, VoxelShape::creator, VoxelShape::initialize, &VoxelShape::drawDbClassification);
 	CHECK_MSTATUS(status);
-	status = MDrawRegistry::registerComponentConverter(MString("VoxelSelectionItem"), VoxelSubSceneComponentConverter::creator);
+	status = MDrawRegistry::registerComponentConverter(MString("VoxelSelectableItem"), VoxelSubSceneComponentConverter::creator);
 	CHECK_MSTATUS(status);
 	status = MDrawRegistry::registerSubSceneOverrideCreator(VoxelSubSceneOverride::drawDbClassification, VoxelSubSceneOverride::drawRegistrantId, VoxelSubSceneOverride::creator);
 	CHECK_MSTATUS(status);
@@ -357,7 +357,7 @@ EXPORT MStatus uninitializePlugin(MObject obj)
 	CHECK_MSTATUS(status);
 	status = plugin.deregisterNode(VoxelShape::id);
 	CHECK_MSTATUS(status);
-	status = MDrawRegistry::deregisterComponentConverter("VoxelSelectionItem");
+	status = MDrawRegistry::deregisterComponentConverter("VoxelSelectableItem");
 	CHECK_MSTATUS(status);
 	status = MDrawRegistry::deregisterSubSceneOverrideCreator(VoxelSubSceneOverride::drawDbClassification, VoxelSubSceneOverride::drawRegistrantId);
 	CHECK_MSTATUS(status);
